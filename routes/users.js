@@ -3,6 +3,7 @@ var router = express.Router();
 const User = require("../models/user.model");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const AdminUser = require("../models/admin.user.model"); // Ensure correct path
 
 
 /* GET users listing. */
@@ -19,6 +20,7 @@ router.post("/signup", async (req, res) => {
       res.status(500).json({ error: "Error registering user" });
   }
 });
+
 router.post("/login", async (req, res) => {
   try {
       const { email, password } = req.body;
@@ -58,5 +60,44 @@ router.post("/get-credits", async (req, res) => {
   }
 });
 
+// ************************ADMIN************************
+router.post("/admin/signup", async (req, res) => {
+    try {
+        const {email, password } = req.body;
+        const hashedPassword = await bcrypt.hash(password, 10);
+  
+        const newUser = new AdminUser({ email, password: hashedPassword });
+        await newUser.save();
+  
+        res.json({ message: "Admin registered successfully" });
+    } catch (error) {
+        res.status(500).json({ error: "Error registering user" });
+    }
+  });
+
+  router.post("/admin/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const adminUser = await AdminUser.findOne({ email });
+
+        // Validate admin user
+        if (!adminUser || !(await bcrypt.compare(password, adminUser.password))) {
+            return res.status(400).json({ error: "Invalid credentials" });
+        }
+
+        // Create JWT Token with `isAdmin` role
+        const token = jwt.sign(
+            { id: adminUser._id, isAdmin: true }, 
+            process.env.ADMIN_SECRET, 
+            { expiresIn: "30d" }
+        );
+
+        res.json({ token, userName: "Admin" });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Error logging in as admin" });
+    }
+});
 
 module.exports = router;

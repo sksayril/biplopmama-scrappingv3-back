@@ -161,6 +161,7 @@ const scrapeGoogleMaps = async (keyword, userId) => {
 
     await new Promise((resolve) => {
       let totalHeight = 0;
+      let maxScrollAttempts = 10; // Increased attempts for deeper scrolling
       let distance = 1000;
       let scrollDelay = 3000;
 

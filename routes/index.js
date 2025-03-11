@@ -5,6 +5,7 @@ const User = require("../models/user.model");
 const jwt = require("jsonwebtoken");
 const scrapeGoogleMaps = require("../utilities/module.scrapper");
 const ScrapeResult = require("../models/scrape.model");
+const Payment = require("../models/payment.model"); // Import the Payment model
 
 /* GET home page. */
 // *********************************RAZORPAY*********************************
@@ -32,18 +33,34 @@ router.post("/create-order", async (req, res) => {
 
 router.post("/verify-payment", async (req, res) => {
   try {
-      const { userToken, order_id, payment_id } = req.body;
-      const decoded = jwt.verify(userToken, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id);
+    const { userToken, order_id, payment_id } = req.body;
+    const decoded = jwt.verify(userToken, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id);
 
-      if (!user) return res.status(400).json({ error: "User not found" });
+    if (!user) return res.status(400).json({ error: "User not found" });
 
-      user.credits += 150; 
-      await user.save();
+    // Save payment details in MongoDB
+    const payment = new Payment({
+      userId: user._id,
+      orderId: order_id,
+      paymentId: payment_id,
+      amount:199,
+    });
 
-      res.json({ message: "Payment successful", credits: user.credits });
+    await payment.save();
+
+    // Update user credits
+    user.credits += 250;
+    await user.save();
+
+    res.json({
+      message: "Payment successful and saved",
+      credits: user.credits,
+    });
+
   } catch (error) {
-      res.status(500).json({ error: "Payment verification failed" });
+    console.error(error);
+    res.status(500).json({ error: "Payment verification and saving failed" });
   }
 });
 
@@ -231,4 +248,133 @@ router.post("/get-scraped-data", async (req, res) => {
   });
   
   
+
+// ******************************ADMIN************************
+const verifyAdmin = (req, res, next) => {
+  const { adminToken } = req.body;
+  if (!adminToken) {
+      return res.status(403).json({ error: "Admin token is required" });
+  }
+
+  try {
+      const decoded = jwt.verify(adminToken, process.env.ADMIN_SECRET);
+
+      // You can add custom logic to check if the user is an admin.
+      // For example, check a role field or compare against a specific admin ID.
+      if (!decoded.isAdmin) {
+          return res.status(403).json({ error: "Unauthorized access - not an admin" });
+      }
+
+      // Attach the decoded data to the request object for further use
+      req.admin = decoded;
+      next();
+
+  } catch (error) {
+      return res.status(403).json({ error: "Invalid or expired admin token" });
+  }
+};
+
+// ✅ API 1: Fetch User Payments and Credits by User ID
+router.post('/admin/getusers', verifyAdmin, async (req, res) => {
+  try {
+      // Fetch all users with specific fields
+      const users = await User.find({}, { _id: 1, email: 1, createdAt: 1 });
+
+      if (!users || users.length === 0) {
+          return res.status(404).json({ error: "No users found" });
+      }
+
+      // Format the response data
+      const formattedUsers = users.map(user => ({
+          userId: user._id,
+          email: user.email,
+          createdAt: user.createdAt,
+      }));
+
+      res.json({ users: formattedUsers });
+
+  } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching users" });
+  }
+});
+
+router.post("/admin/user-details", verifyAdmin, async (req, res) => {
+  try {
+      const { userId } = req.body;
+      const user = await User.findById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const userPayments = await Payment.find({ userId });
+      const totalPayments = userPayments.reduce((sum, payment) => sum + payment.amount, 0);
+
+      res.json({
+          userId: user._id,
+          name: user.name,
+          email: user.email,
+          credits: user.credits,
+          totalPayments,
+          payments: userPayments,
+      });
+  } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching user details" });
+  }
+});
+
+router.post("/admin/revenue-summary", verifyAdmin, async (req, res) => {
+  try {
+      // 1. Calculate total revenue
+      const totalRevenueData = await Payment.aggregate([
+          {
+              $group: {
+                  _id: null,
+                  total: { $sum: "$amount" }
+              }
+          }
+      ]);
+
+      const totalRevenue = totalRevenueData[0]?.total || 0;
+
+      // 2. Calculate month-wise revenue
+      const monthlyRevenue = await Payment.aggregate([
+          {
+              $group: {
+                  _id: {
+                      year: { $year: "$createdAt" },
+                      month: { $month: "$createdAt" }
+                  },
+                  total: { $sum: "$amount" }
+              }
+          },
+          {
+              $sort: {
+                  "_id.year": -1,
+                  "_id.month": -1
+              }
+          }
+      ]);
+
+      // Format the results
+      const formattedRevenue = monthlyRevenue.map(item => ({
+          month: `${item._id.month}-${item._id.year}`,
+          totalRevenue: item.total
+      }));
+
+      // 3. Get total users
+      const totalUsers = await User.countDocuments();
+
+      res.json({
+          totalRevenue,
+          totalUsers,
+          monthlyRevenue: formattedRevenue
+      });
+
+  } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Error fetching revenue summary" });
+  }
+});
+
+
 module.exports = router;
